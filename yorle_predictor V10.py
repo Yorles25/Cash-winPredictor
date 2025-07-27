@@ -122,57 +122,6 @@ def generar_prediccion_persistencia(df_historico, params):
     numeros_base = df_historico.tail(retraso)['numero'].unique().tolist()
     return numeros_base
 
-# --- NUEVA Estrategia: Semáforo Predictivo 🚦 ---
-def generar_prediccion_semaforo(df_historico, fecha_str, params):
-    # Parámetros de usuario
-    umbral_rotacion_verde = params.get('rotacion_verde', 4)
-    umbral_momentum_verde = params.get('momentum_verde', 2)
-    ventana_maduracion = params.get('ventana_maduracion', 10)
-    num_verdes = params.get('num_verdes', 3)
-    num_amarillos = params.get('num_amarillos', 3)
-    num_rojos = params.get('num_rojos', 3)
-
-    fecha_actual = pd.to_datetime(fecha_str)
-    todos_numeros = df_historico['numero'].unique()
-    if df_historico.empty: return []
-
-    # Rotación: promedio de días entre apariciones
-    rotaciones = {n: calcular_rotacion(df_historico, n) for n in todos_numeros}
-    # Momentum: apariciones en la ventana reciente
-    df_historico_copy = df_historico.copy()
-    df_historico_copy["fecha_dt"] = pd.to_datetime(df_historico_copy["fecha"]).dt.date
-    ventana_inicio = (fecha_actual.date() - timedelta(days=ventana_maduracion))
-    momentum = df_historico_copy[df_historico_copy["fecha_dt"] >= ventana_inicio]['numero'].value_counts().to_dict()
-    # Maduración: días desde última aparición
-    maduracion = {n: calcular_puntuacion_sorpresa(n, df_historico, fecha_actual) for n in todos_numeros}
-
-    # Cálculos compuestos para semáforo
-    verdes = []
-    amarillos = []
-    rojos = []
-    for n in todos_numeros:
-        rot = rotaciones.get(n, 100)
-        mom = momentum.get(n, 0)
-        mad = maduracion.get(n, 100)
-        # Verde: rotación baja, momentum alto, maduración baja
-        if rot is not None and rot <= umbral_rotacion_verde and mom >= umbral_momentum_verde and mad <= ventana_maduracion:
-            verdes.append((n, rot, mom, mad))
-        # Amarillo: valores intermedios
-        elif rot is not None and mom > 0 and mad <= ventana_maduracion*2:
-            amarillos.append((n, rot, mom, mad))
-        else:
-            rojos.append((n, rot, mom, mad))
-    # Ordenar por momentum y maduración
-    verdes = sorted(verdes, key=lambda x: (-x[2], x[3]))[:num_verdes]
-    amarillos = sorted(amarillos, key=lambda x: (-x[2], x[3]))[:num_amarillos]
-    rojos = sorted(rojos, key=lambda x: (x[3], -x[2]))[:num_rojos]
-    # Extraer sólo número
-    return {
-        'verdes': [v[0] for v in verdes],
-        'amarillos': [a[0] for a in amarillos],
-        'rojos': [r[0] for r in rojos]
-    }
-
 # --- Funciones Auxiliares de la Interfaz ---
 def render_strategy_parameters(strategy_name, key_prefix):
     st.sidebar.markdown("---"); st.sidebar.header(f"⚙️ Parámetros: {strategy_name}")
@@ -194,13 +143,6 @@ def render_strategy_parameters(strategy_name, key_prefix):
         params['ventana_dias'] = st.sidebar.number_input("Ventana (días)", 3, 30, 10, 1, key=f"{key_prefix}_vd")
         params['numero_candidatos'] = st.sidebar.number_input("Candidatos", 3, 20, 5, 1, key=f"{key_prefix}_nc_corto")
         params['tipo_ponderacion'] = st.sidebar.selectbox("Ponderación", ["Exponencial", "Lineal"], 0, key=f"{key_prefix}_tp")
-    elif "Semáforo Predictivo" in strategy_name:
-        params['rotacion_verde'] = st.sidebar.slider("Rot. Verde (días)", 1, 15, 4, key=f"{key_prefix}_rot_verde")
-        params['momentum_verde'] = st.sidebar.slider("Momentum Verde (mín. apariciones)", 1, 10, 2, key=f"{key_prefix}_mom_verde")
-        params['ventana_maduracion'] = st.sidebar.slider("Maduración (días)", 3, 30, 10, key=f"{key_prefix}_vent_mad")
-        params['num_verdes'] = st.sidebar.number_input("Números 🟢", 1, 10, 3, 1, key=f"{key_prefix}_n_verde")
-        params['num_amarillos'] = st.sidebar.number_input("Números 🟡", 1, 10, 3, 1, key=f"{key_prefix}_n_ama")
-        params['num_rojos'] = st.sidebar.number_input("Números 🔴", 1, 10, 3, 1, key=f"{key_prefix}_n_rojo")
     return params
 
 def get_next_sorteo(df):
@@ -220,14 +162,7 @@ def get_next_sorteo(df):
 # --- Módulos de la Aplicación ---
 def modulo_prediccion():
     st.header("🔮 Generador de Predicciones")
-    strategy_options = [
-        "Estrategia de Afinidad 🤝", 
-        "Estrategia de Persistencia (Eco) 📢", 
-        "Estrategia del Detective 🕵️", 
-        "Patrones de Corto Plazo 📈", 
-        "Doble Estrategia 🔁",
-        "Semáforo Predictivo 🚦"   # <-- NUEVA ESTRATEGIA
-    ]
+    strategy_options = ["Estrategia de Afinidad 🤝", "Estrategia de Persistencia (Eco) 📢", "Estrategia del Detective 🕵️", "Patrones de Corto Plazo 📈", "Doble Estrategia 🔁"]
     strategy_name = st.selectbox("¿Qué tipo de análisis deseas usar?", strategy_options)
     params = render_strategy_parameters(strategy_name, key_prefix='pred')
     
@@ -252,17 +187,6 @@ def modulo_prediccion():
         if not activos: activos = list(numeros_en_datos)
         candidatos_ordenados = sorted(activos, key=lambda n: st.session_state.pesos.get(n, 0), reverse=True)
         candidatos = candidatos_ordenados[:params['numero_candidatos']]
-    elif "Semáforo Predictivo" in strategy_name:
-        resultado_semaforo = generar_prediccion_semaforo(df.copy(), next_date, params)
-        # Mostrar semáforo en métricas
-        st.markdown("#### 🟢 Alta probabilidad")
-        st.info(", ".join(str(x) for x in resultado_semaforo['verdes']) if resultado_semaforo['verdes'] else "Sin candidatos")
-        st.markdown("#### 🟡 Probabilidad moderada")
-        st.warning(", ".join(str(x) for x in resultado_semaforo['amarillos']) if resultado_semaforo['amarillos'] else "Sin candidatos")
-        st.markdown("#### 🔴 Baja probabilidad")
-        st.error(", ".join(str(x) for x in resultado_semaforo['rojos']) if resultado_semaforo['rojos'] else "Sin candidatos")
-        # Para coherencia con el resto, 'candidatos' será la suma de todos
-        candidatos = resultado_semaforo['verdes'] + resultado_semaforo['amarillos'] + resultado_semaforo['rojos']
     else: # Corto Plazo
         candidatos = generar_prediccion_corto_plazo(df.copy(), next_date, params['ventana_dias'], params['numero_candidatos'], params['tipo_ponderacion'])
         
@@ -270,20 +194,12 @@ def modulo_prediccion():
         st.error("La estrategia no pudo generar suficientes candidatos. Prueba a ajustar los parámetros.")
         return
     
-    if "Semáforo Predictivo" not in strategy_name:
-        prediccion_final = ", ".join(map(str, sorted(candidatos[:3])))
-        st.metric("Números Sugeridos", prediccion_final)
+    prediccion_final = ", ".join(map(str, sorted(candidatos[:3])))
+    st.metric("Números Sugeridos", prediccion_final)
 
 def modulo_backtesting():
     st.header("🧪 Backtesting Interactivo (Análisis por Sorteo)")
-    strategy_options_bt = [
-        "Estrategia de Afinidad 🤝", 
-        "Estrategia de Persistencia (Eco) 📢", 
-        "Estrategia del Detective 🕵️", 
-        "Patrones de Corto Plazo 📈", 
-        "Doble Estrategia 🔁",
-        "Semáforo Predictivo 🚦"  # <-- NUEVA ESTRATEGIA
-    ]
+    strategy_options_bt = ["Estrategia de Afinidad 🤝", "Estrategia de Persistencia (Eco) 📢", "Estrategia del Detective 🕵️", "Patrones de Corto Plazo 📈", "Doble Estrategia 🔁"]
     strategy_name_bt = st.selectbox("¿Qué estrategia quieres simular?", strategy_options_bt, key="bt_strategy_selector")
     params_bt = render_strategy_parameters(strategy_name_bt, key_prefix='bt')
     
@@ -334,9 +250,6 @@ def modulo_backtesting():
                     if not rotaciones_dia: activos = sorted(pesos_bt, key=lambda k: pesos_bt.get(k, 0), reverse=True)
                     else: activos = sorted(rotaciones_dia, key=lambda n: pesos_bt.get(n, 0), reverse=True)
                     candidatos = activos[:params_bt['numero_candidatos']]
-                elif "Semáforo Predictivo" in strategy_name_bt:
-                    resultado_semaforo = generar_prediccion_semaforo(df_historico.copy(), sorteo_actual['fecha'], params_bt)
-                    candidatos = resultado_semaforo['verdes'] + resultado_semaforo['amarillos'] + resultado_semaforo['rojos']
                 else: # Corto Plazo
                     candidatos = generar_prediccion_corto_plazo(df_historico.copy(), sorteo_actual['fecha'], params_bt['ventana_dias'], params_bt['numero_candidatos'], params_bt['tipo_ponderacion'])
                 
@@ -374,23 +287,6 @@ def modulo_backtesting():
         st.subheader(f"Resultados para: {st.session_state.get('bt_strategy_selector')}")
         m_col1,m_col2,m_col3=st.columns(3)
         m_col1.metric("Predicciones",total); m_col2.metric("Aciertos",aciertos); m_col3.metric("Precisión",f"{porcentaje}%")
-        st.markdown("---"); st.subheader("📋 Vista Diaria de Resultados (Pivotada por día)")
-        # --- NUEVA VISUALIZACIÓN DIARIA ---
-        # Transformación del bt_df para tabla pivotada
-        pivot_data = bt_df.copy()
-        # Creamos la columna resumen para cada fila: (P:predicho R:real ✅/❌)
-        pivot_data['resumen'] = pivot_data.apply(
-            lambda row: f"(P:{row['predicho']} R:{row['real']} {'✅' if row['acierto'] else '❌'})", axis=1
-        )
-        # Pivotamos por fecha, columnas por franja, valores por 'resumen'
-        pivot_table = pivot_data.pivot_table(index="fecha", columns="franja", values="resumen", aggfunc="first")
-        # Reordenamos columnas por franja definida
-        for col in franjas:
-            if col not in pivot_table.columns:
-                pivot_table[col] = ""
-        pivot_table = pivot_table[franjas]
-        # Mostramos la tabla
-        st.dataframe(pivot_table.fillna(""), use_container_width=True)
         st.markdown("---"); st.subheader("📋 Detalle de Resultados (Últimos 50)")
         enc_cols=st.columns([2,2,2,1,2,2,2])
         enc_cols[0].write("**Fecha**"); enc_cols[1].write("**Franja**"); enc_cols[2].write("**Predicción**")
